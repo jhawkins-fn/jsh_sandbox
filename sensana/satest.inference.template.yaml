@@ -1,0 +1,93 @@
+name: 20210505_inference_part___RNG_SEED__
+
+data_access_spec:
+  kwargs:
+    n_per_single_feature: 3
+    n_all_feature: 5
+    n_flat_scaling: 5
+    # max_cols: 2
+    column_keys:
+    - "MET"
+    - "TNC"
+    - "THBS2"
+    - "IL-6RA"
+    - "U-PAR"
+    - "IL-1RT2"
+    - "MIF"
+    - "IL8"
+    - "IL6"
+    - "Flt3L"
+    - "CCL20"
+    - "EGF"
+    - "HGF"
+    - "MUC-16"
+    - "AFP"
+    - "Total PSA"
+    - "CA 19-9"
+    - "CEA"
+    - "CYFRA 21-1"
+    - "OPN"
+    wrapped_factory:
+      kwargs:
+        features:
+        - feature: butter-ASCO-everything-train3_1200k_healthy_net_4layer2pool_multi_task_poisson_pos_weight01/v1
+          metadata_fields: []
+          missing_data: raise
+          query:
+          - filters: []
+            label: 0
+            training_class: colorectal_healthy_temseqV3_fuzzy_discovery2delta_v3
+          - filters: []
+            label: 1
+            training_class: colorectal_cancer_temseqV3_fuzzy_discovery2delta_v3
+          - filters: []
+            label: 1
+            training_class: colorectal_precancer_temseqV3_fuzzy_discovery2delta_v3
+          - filters: []
+            label: 0
+            training_class: colorectal_healthy_temseqV3_fuzzy_discovery2gamma_v2
+          - filters: []
+            label: 1
+            training_class: colorectal_cancer_temseqV3_fuzzy_discovery2gamma_v2
+          - filters: []
+            label: 1
+            training_class: colorectal_precancer_temseqV3_fuzzy_discovery2gamma_v2
+        - feature: olink_all_panels_disc2/v1
+          metadata_fields: []
+          missing_data: keep
+          query:
+          - filters: []
+            label: 0
+            training_class: colorectal_healthy_olink_discovery2delta_v3
+          - filters: []
+            label: 1
+            training_class: colorectal_cancer_olink_discovery2delta_v3
+          - filters: []
+            label: 1
+            training_class: colorectal_precancer_olink_discovery2delta_v3
+          - filters: []
+            label: 0
+            training_class: colorectal_healthy_olink_discovery2gamma_v2
+          - filters: []
+            label: 1
+            training_class: colorectal_cancer_olink_discovery2gamma_v2
+          - filters: []
+            label: 1
+            training_class: colorectal_precancer_olink_discovery2gamma_v2
+        multi_feat_set: intersect
+        sample_filters: []
+      name: pineapple.contrib.components.data_factories.matrix_factory_from_class.MatrixFactoryFromClass
+  name: pineapple.contrib.components.data_factories.perturb_factory.PerturbFactory
+
+specificity: 0.95
+
+random_state: __RNG_SEED__
+
+prediction_methods:
+    - set_final
+  # - fold_pred_voting
+  # - fold_score_averaging
+
+fitted_models:
+  - name: crcaa-neg_concat-logreg_butter_olink
+    run_id: fcac7386a87474b4082a
