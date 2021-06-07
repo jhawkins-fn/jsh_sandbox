@@ -1,0 +1,172 @@
+data_access_spec:
+  kwargs:
+    features:
+    - feature: butter-ASCO-everything-train3_1200k_healthy_net_4layer2pool_multi_task_poisson_pos_weight01/v1
+      metadata_fields: []
+      missing_data: raise
+      query:
+      - filters: []
+        label: 0
+        training_class: colorectal_healthy_temseqV3_fuzzy_discovery2alpha_v6
+      - filters: []
+        label: 1
+        training_class: colorectal_cancer_temseqV3_fuzzy_discovery2alpha_v6
+      - filters: []
+        label: 1
+        training_class: colorectal_precancer_temseqV3_fuzzy_discovery2alpha_v6
+      - filters: []
+        label: 0
+        training_class: colorectal_healthy_temseqV3_fuzzy_discovery2beta_v3
+      - filters: []
+        label: 1
+        training_class: colorectal_cancer_temseqV3_fuzzy_discovery2beta_v3
+      - filters: []
+        label: 1
+        training_class: colorectal_precancer_temseqV3_fuzzy_discovery2beta_v3
+    - feature: olink_all_panels_disc2/v1
+      metadata_fields: []
+      missing_data: keep
+      query:
+      - filters: []
+        label: 0
+        training_class: colorectal_healthy_olink_discovery2alpha_v6
+      - filters: []
+        label: 1
+        training_class: colorectal_cancer_olink_discovery2alpha_v6
+      - filters: []
+        label: 1
+        training_class: colorectal_precancer_olink_discovery2alpha_v6
+      - filters: []
+        label: 0
+        training_class: colorectal_healthy_olink_discovery2beta_v3
+      - filters: []
+        label: 1
+        training_class: colorectal_cancer_olink_discovery2beta_v3
+      - filters: []
+        label: 1
+        training_class: colorectal_precancer_olink_discovery2beta_v3
+    multi_feat_set: intersect
+    sample_filters: []
+  name: pineapple.contrib.components.data_factories.matrix_factory_from_class.MatrixFactoryFromClass
+experiment_timestamp: 2020-06-27 00:00:00
+fold_maker_spec:
+  kwargs:
+    k: 10
+    metadata:
+    - stage
+    - pathologic_sub_type
+    n_resampling: 3
+    shuffle: true
+    strict: false
+  name: pineapple.contrib.components.fold_makers.metadata_balanced_kfold.MetadataBalancedKFold
+hyperparam_search_spec:
+  desired_noise_floor:
+    choice:
+    - 1.0e-05
+    - 2.0e-05
+    - 1.3e-05
+    - 5.0e-06
+    - 1.0e-06
+    - 6.67e-07
+    - 5.0e-07
+    - 0.1
+    type: categorical
+  logreg_C:
+    high: 10
+    low: 0.01
+    type: uniform_float
+  min_effect_size:
+    choice:
+    - 3.0
+    - 5.0
+    - 500.0
+    - 1000.0
+    - 5000.0
+    - 7500.0
+    - 10000.0
+    - 15000.0
+    type: categorical
+  min_prob_clean:
+    choice:
+    - 0.85
+    - 0.9
+    - 0.93
+    - 0.95
+    - 0.97
+    - 0.99
+    - 0.999
+    type: categorical
+name: crcaa-neg_concat-logreg_butter_olink
+random_state: 0
+resource_spec:
+  kwargs:
+    backend: dask
+    cpu: 1
+    gpu: 0
+    memory: 10GiB
+    preemptible: true
+    retries: 2
+    use_local_cluster: false
+    workers: null
+  name: pineapple.contrib.components.job_controllers.distributed_job_controller.DistributedJobController
+search_spec:
+  kwargs:
+    fold_maker_spec:
+      kwargs:
+        k: 3
+        metadata:
+        - stage
+        - pathologic_sub_type
+        n_resampling: 1
+        shuffle: true
+        strict: false
+      name: pineapple.contrib.components.fold_makers.metadata_balanced_kfold.MetadataBalancedKFold
+    maximize: true
+    metric: null
+    metrics:
+    - test_sens_upperthresh_spec90
+    - test_auc
+    random_search_state: null
+    single_spec: true
+    total_eval: 100
+  name: pineappleflow.core.components.contrib.hyper_parameter_optimizers.random_search.RandomSearch
+---
+metric_spec:
+  name: pineapple.contrib.components.metric_computers.binary_class_metric_computer.BinaryClassMetricComputer
+model_spec:
+  kwargs:
+    C: $(logreg_C)
+    class_weight: balanced
+    l1_ratio: 0.5
+    penalty: elasticnet
+    solver: saga
+  model: sklearn.linear_model.LogisticRegression
+  name: pineapple.contrib.components.model_recipes.sklearn_recipe.SklearnRecipe
+transformers:
+- feature: butter-ASCO-everything-train3_1200k_healthy_net_4layer2pool_multi_task_poisson_pos_weight01/v1
+  transformer_specs:
+  - kwargs:
+      desired_noise_floor: $(desired_noise_floor)
+      min_effect_size: $(min_effect_size)
+      min_features: 2
+      min_prob_clean: $(min_prob_clean)
+    name: pineapple.contrib.components.transformers.methyl.poisson_outlier.ChooseSettingsAndRegionsForPoissonV2
+  - kwargs:
+      desired_noise_floor: $(desired_noise_floor)
+      output_count: true
+    name: pineapple.contrib.components.transformers.methyl.poisson_outlier.PoissonOutlierV2
+- feature: olink_all_panels_disc2/v1
+  transformer_specs:
+  - kwargs:
+      strategy: median
+      training_classes:
+      - colorectal_healthy_olink_discovery2alpha_v6_panelofneg
+      - colorectal_healthy_olink_discovery2beta_v3_panelofneg
+    name: pineapple.contrib.components.transformers.common.imputer.SimpleImputer
+  - kwargs:
+      feature_key: Uniprot ID
+      feature_list: gs://protein-reference-data/lists/recalibration/final_olink_Assay_uniprot.txt
+      remove_feature: false
+    name: pineapple.contrib.components.transformers.common.filter_feature.FilterFeature
+  - name: pineapple.contrib.components.transformers.common.standard_scaler.StandardScaler
+name: pineappleflow.core.components.contrib.pipelines.canonical_pipeline.CanonicalPipeline

@@ -1,32 +1,17 @@
-name: 20210505_inference_part___RNG_SEED__
+name: 20210525_inference_part___RNG_SEED__
+project: pineapple
+domain: development
 
 data_access_spec:
   kwargs:
     n_per_single_feature: 3
+    single_feature_cv: 0.1
     n_all_feature: 5
-    n_flat_scaling: 5
+    all_feature_cv: 0.1
+    n_flat_scaling: 8
+    column_field: Uniprot ID
+    pattern_file: gs://protein-reference-data/lists/recalibration/final_olink_Assay_uniprot.txt
     # max_cols: 2
-    column_keys:
-    - "MET"
-    - "TNC"
-    - "THBS2"
-    - "IL-6RA"
-    - "U-PAR"
-    - "IL-1RT2"
-    - "MIF"
-    - "IL8"
-    - "IL6"
-    - "Flt3L"
-    - "CCL20"
-    - "EGF"
-    - "HGF"
-    - "MUC-16"
-    - "AFP"
-    - "Total PSA"
-    - "CA 19-9"
-    - "CEA"
-    - "CYFRA 21-1"
-    - "OPN"
     wrapped_factory:
       kwargs:
         features:
@@ -90,4 +75,4 @@ prediction_methods:
 
 fitted_models:
   - name: crcaa-neg_concat-logreg_butter_olink
-    run_id: fcac7386a87474b4082a
+    run_id: f2240a347bdaf4054866

@@ -12,26 +12,26 @@ from pineappleflow.core.flyte.loaders.flyte_inference_loader import FlyteInferen
 
 
 _RUN_ID_LIST = [
-    "f509fc388533740dba02",
-    "fefd9e9d19d8543bba98",
-    "fb1bb4908b63d43c7a52",
-    "fe890c7473c634c29ad1",
-    "fdfff8b375ea9436eb4f",
-    "f7fa1b90da2b74b4cb48",
-    "f0a1359405bbc46ddaa5",
-    "f578e55bc6ab140b2aa9",
-    "fb957ca851d394430bb5",
-    "fe6f18a3d69d64fe2b1d",
-    "f5f8d59397371476b926",
-    "fe989b11a0fbe472cbba",
-    "f17dcbe9810344662815",
-    "ffd6984db45c24fa3878",
-    "f368e345099ab429890f",
-    "f1a0a8d4a4ec54bf890d",
-    "f2512fd58063845babd3",
-    "f4dc46ce28f9c4fce89a",
-    "f3cf0f3e2720745619ac",
-    "fd36d4364bbe14248909",
+    "f928d7c02d42347c5a66",
+    "fffbf936cfbc64b39b46",
+    "f176780398b3343348c6",
+    "f3beaec3f24ac4b25ae2",
+    "f476dce3ef801420584f",
+    "f2d34df609b0d45b0aab",
+    "fd3dd14c1437a4e39a83",
+    "f6f7d5df66a3742009b5",
+    "fe2f5c8e9f0d74d2985c",
+    "f51d01b1311f948459f4",
+    "febc87d7c316540ed8c0",
+    "f0082389367664dd58d4",
+    "ff844bd75b6d74c7185e",
+    "f9d0e907e7e3f4b168c3",
+    "f5e6e73fc32f84517985",
+    "fa1c9502fd02d4c39afc",
+    "fd07fc8e0f7c842d394d",
+    "f25cab46a5b4b4473bb8",
+    "fffa9943dd05e4816b17",
+    "f194cdaa4980543e7a63",
 ]
 
 
@@ -188,9 +188,9 @@ def debug_context(big_frame, agg_frame, heat_frame):
             idx_list.append(int(x[x.find("(") + 1 : x.find(",")]))
     idx = np.array(list(set(idx_list)))
     loader = FlyteInferenceLoader.from_run_id(_RUN_ID_LIST[0], domain="development", project="pineapple")
-    fh = loader.post_transformer_matrix_holder
-    m0 = fh[fh.features[0]]
-    m1 = fh[fh.features[1]]
+    mh = loader.fold('train_set_final').post_transformer_matrix_holder
+    m0 = mh[mh.features[0]]
+    m1 = mh[mh.features[1]]
     clif = loader.experiment_loader.fold('train_set_final').fitted_model_recipe.classifier
     pdb.set_trace()
     print("I guess we're done debugging!")
@@ -215,8 +215,8 @@ def main():
         heat_frame = store['heat_frame']
 
     # DEBUG
-    # debug_context(big_frame, agg_frame, heat_frame)
-    # return
+    debug_context(big_frame, agg_frame, heat_frame)
+    return
     # DEBUG
     draw_heatmap(agg_frame, heat_frame, "sensana.clustermap.png")
     scatter_score_vs_pospercent(big_frame, agg_frame, "sensana.score.fragility.png")
@@ -225,17 +225,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# DONE: -- save raw, compare to "unperturbed"
-    # looks correct in tests
-# DONE: -- where is "unperturbed" value in "perturbed" distribution?
-    # answer: the feature values are dead center.  The scores are emphatically *not*.
-# TODO(jsh): NEXT THING -- run both unperturbed and perturbed through model.  Consistent?
-
-# TODO(jsh): LATER -- re-run with corrected flatscale labels
-# TODO(jsh): LATER -- test bigger variance ranges
-# TODO(jsh): LATER -- try a non-diagonal covariance perturbation
 
 
 def test_create_sa_frame():
