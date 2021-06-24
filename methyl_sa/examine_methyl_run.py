@@ -92,6 +92,7 @@ def debug_context():
     for reg in range(pmtp.shape[0]):
         reg_sub = list()
         for thresh in range(pmtp.shape[1]):
+            print(f"re-flipping region: {reg}, thresh: {thresh}")
             base_slice = i_pre_mat[:, reg, thresh, :].x
             pre_flipper = pre_flippers[reg, thresh]
             perturbations = list()
@@ -134,21 +135,22 @@ def sample_reflipper(mcpg_neg: int, tcpg_neg: int) -> Callable[[int, int], Tuple
     def reflip_func(c_m: int, h_m: int, n_resample: int) -> Tuple[int, int]:
         split_post_agg = list()
         # iterate over all ways to split c_m over the two source cases (c|c) and (c|h)
-        for from_c in range(0, c_m+1):
-            # TODO(jsh): vectorize and/or memoize this loop
-            from_h = c_m - from_c
-            split_post = st.binom.pmf(from_c, c_m, p_c_c) * st.binom.pmf(from_h, h_m, p_c_h)
-            split_post_agg.append(split_post)
-        split_posts = np.array(split_post_agg)
-        split_probs = split_posts.sum(axis=0)
+        from_c = np.array(range(0, c_m+1))
+        from_h = c_m - from_c
+        split_post = st.binom.pmf(from_c, c_m, p_c_c[:, np.newaxis]) * st.binom.pmf(from_h, h_m, p_c_h[:, np.newaxis])
+        split_probs = split_post.sum(axis=1)
         mle_idx = np.argmax(split_probs)
         best_p_c_c = p_c_c[mle_idx]
         best_p_c_h = p_c_h[mle_idx]
         trials = c_m + h_m
-        c_perturbed = _RNG.binomial(c_m, best_p_c_c, n_resample) +\
-                      _RNG.binomial(h_m, best_p_c_h, n_resample)
-        h_perturbed = trials - c_perturbed
-        return np.array([c_perturbed, h_perturbed]).T
+        if np.isnan(best_p_c_c) or np.isnan(best_p_c_h):
+            # if the negs had no data for this slice, leave it alone
+            return np.tile([c_m, h_m], [n_resample, 1])
+        else:
+            c_perturbed = _RNG.binomial(c_m, best_p_c_c, n_resample) +\
+                          _RNG.binomial(h_m, best_p_c_h, n_resample)
+            h_perturbed = trials - c_perturbed
+            return np.array([c_perturbed, h_perturbed]).T
 
     return reflip_func
 
