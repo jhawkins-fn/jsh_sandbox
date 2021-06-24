@@ -5,7 +5,7 @@ mkdir -p satest_logs
 
 echo -n "" > inference_jobs.txt
 
-for n in {40..59}
+for n in {0..19}
 do
 
   export specfile="satest_yamls/satest.inference.${n}.yaml"

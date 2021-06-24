@@ -5,6 +5,7 @@
 .unison*
 *.xlsx
 *.outdir/
+*.h5
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

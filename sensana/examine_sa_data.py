@@ -12,26 +12,26 @@ from pineappleflow.core.flyte.loaders.flyte_inference_loader import FlyteInferen
 
 
 _RUN_ID_LIST = [
-    "f928d7c02d42347c5a66",
-    "fffbf936cfbc64b39b46",
-    "f176780398b3343348c6",
-    "f3beaec3f24ac4b25ae2",
-    "f476dce3ef801420584f",
-    "f2d34df609b0d45b0aab",
-    "fd3dd14c1437a4e39a83",
-    "f6f7d5df66a3742009b5",
-    "fe2f5c8e9f0d74d2985c",
-    "f51d01b1311f948459f4",
-    "febc87d7c316540ed8c0",
-    "f0082389367664dd58d4",
-    "ff844bd75b6d74c7185e",
-    "f9d0e907e7e3f4b168c3",
-    "f5e6e73fc32f84517985",
-    "fa1c9502fd02d4c39afc",
-    "fd07fc8e0f7c842d394d",
-    "f25cab46a5b4b4473bb8",
-    "fffa9943dd05e4816b17",
-    "f194cdaa4980543e7a63",
+    "f59b37ccbaf3944cd8a3",
+    "f26a23c010a534b71ba6",
+    "f114a2f8fee08484e89c",
+    "f3cc9ee3e995b4fca815",
+    "f72c194af1f0d4ad7b22",
+    "f9a6857f4a51e41d68c0",
+    "f79fea7dcf26b49eab2b",
+    "f90e6167453944314a3d",
+    "f43258642892f4f1dbc2",
+    "f373d22a018b14cb898f",
+    "f3cb9e1faeb75427cab0",
+    "fe4c895b7431241e8a0d",
+    "f15e34970c97242a18bf",
+    "f8c9feefa6f3f4af4a46",
+    "f23fb65c968d74473a1c",
+    "f09fb4a7652f44f5aae5",
+    "f638ec82fe77e483ebf9",
+    "f9dbaf5aed4c946b58b0",
+    "f9711495a2a9647d0b5b",
+    "fade4789711de4e88892",
 ]
 
 
@@ -85,7 +85,7 @@ def create_sa_frames(run_id):
     base_columns = [get_column_name(c) for f in two_dim_features for c in mh[f].column_metadata] + ["loghmf"]
     unique_columns = clean_columns(base_columns)
     big_frame = pd.DataFrame(data=x_merged, columns=unique_columns)
-    sa_frame["loghmf"] = big_frame.loghmf
+    sa_frame["loghmf"] = big_frame["loghmf/0"]
     sa_frame["cutoff"] = loader.aggregated_model_result.classification_thresholds[0]
     return big_frame, sa_frame
 
@@ -96,10 +96,9 @@ def clean_columns(columns):
     for c in columns:
         if c not in col_tracker:
             col_tracker[c] = 0
-            unique_cols.append(c)
         else:
             col_tracker[c] += 1
-            unique_cols.append(f"{c}_{col_tracker[c]}")
+        unique_cols.append(f"{c}/{col_tracker[c]}")
     return np.array(unique_cols)
 
 
@@ -168,13 +167,17 @@ def scatter_score_vs_pospercent(big_frame, agg_frame, png_filename):
 
 
 def plot_variation_hists(big_frame, agg_frame, png_prefix):
-    idx_list = list()
+    # TODO(jsh):    feature value for 1feat perturbation
+    # TODO(jsh):  - unperturbed
+    # TODO(jsh):  * coef_
+    # TODO(jsh):  ...
+    # TODO(jsh):  vs score
+    name_list = set()
     for x in agg_frame.ptag:
         if "1feat" in x:
-            idx_list.append(int(x[x.find("(") + 1 : x.find(",")]))
-    idx = np.array(list(set(idx_list)))
-    for i in idx:
-        rows = big_frame.loc[agg_frame.ptag.str.contains(str(i))]
+            idx_list.add(x[x.find("(") + 1 : x.find(",")])
+    for name in idx:
+        rows = big_frame.loc[agg_frame.ptag.str.contains(name)]
         col = big_frame.columns[i]
         sns.displot(rows.iloc[:, i])
         plt.savefig(png_prefix + f".{col}.{i}.png", dpi=300)
@@ -183,10 +186,6 @@ def plot_variation_hists(big_frame, agg_frame, png_prefix):
 
 def debug_context(big_frame, agg_frame, heat_frame):
     idx_list = list()
-    for x in agg_frame.ptag:
-        if "1feat" in x:
-            idx_list.append(int(x[x.find("(") + 1 : x.find(",")]))
-    idx = np.array(list(set(idx_list)))
     loader = FlyteInferenceLoader.from_run_id(_RUN_ID_LIST[0], domain="development", project="pineapple")
     mh = loader.fold('train_set_final').post_transformer_matrix_holder
     m0 = mh[mh.features[0]]
@@ -220,7 +219,6 @@ def main():
     # DEBUG
     draw_heatmap(agg_frame, heat_frame, "sensana.clustermap.png")
     scatter_score_vs_pospercent(big_frame, agg_frame, "sensana.score.fragility.png")
-    plot_variation_hists(big_frame, agg_frame, "sensana.1feat.variation")
 
 
 if __name__ == "__main__":
