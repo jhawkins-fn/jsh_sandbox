@@ -3,21 +3,23 @@ from typing import Callable, Tuple
 from collections import defaultdict
 from copy import deepcopy
 import pdb
-import re
 
-from matplotlib import pyplot as plt
-from matplotlib import cm
+# from matplotlib import pyplot as plt
+# from matplotlib import cm
 import numpy as np
 import pandas as pd
-from statsmodels.graphics.gofplots import qqplot
+
+# from statsmodels.graphics.gofplots import qqplot
+# import seaborn as sns
 import scipy.stats as st
-import seaborn as sns
 
 from calzone.models import (
     CalzoneDatasetMetadata,
 )
 from pineappleflow.core.artifacts.matrix import MatrixHolder, Matrix, RowMetadata
-from pineappleflow.core.flyte.loaders.flyte_experiment_loader import FlyteExperimentLoader
+from pineappleflow.core.flyte.loaders.flyte_experiment_loader import (
+    FlyteExperimentLoader,
+)
 from pineappleflow.core.flyte.loaders.flyte_inference_loader import FlyteInferenceLoader
 
 
@@ -26,121 +28,108 @@ _INFERENCE_RUN_ID = "f3bde335c82b448d488e"
 _RNG = np.random.default_rng()
 _NORM_TCPG_COUNT = 100_000
 _N_REROLLS = 100
+_PERTURBED_X_FILENAME = "perturbed_x.npy"
 
 
-def plot_methyl_dists(data, png_prefix):
-    sns.displot(data=data, x='methyl', hue='type', kind='ecdf')
-    plt.savefig(png_prefix + f".methyl.dists.png", dpi=300)
-    plt.close("all")
+# Type for methyl noise sample reflipper functions
+ReflipFunc = Callable[[int, int, int], Tuple[int, int]]
 
 
-def simplify_pathological_type(typename):
-    if typename is not None:
-        if typename.startswith("Negative"):
-            return "NEG"
-        elif typename == "Adenocarcinoma":
-            return "CRC"
-        elif typename == "AA":
-            return "AA"
-    return None
+def build_loaders(
+    train_id: str,
+    inf_id: str,
+) -> Tuple[
+    FlyteExperimentLoader,
+    MatrixHolder,
+    MatrixHolder,
+    FlyteExperimentLoader,
+    MatrixHolder,
+    MatrixHolder,
+]:
+    # set up FlyteLoaders
+    eloader = FlyteExperimentLoader.from_run_id(
+        train_id, domain="development", project="pineapple"
+    )
+    e_pre = eloader.fold("train_set_final").pre_transformer_fold_holder.train
+    e_post = eloader.fold("train_set_final").post_transformer_fold_holder.train
+    iloader = FlyteInferenceLoader.from_run_id(
+        inf_id, domain="development", project="pineapple"
+    )
+    i_pre = iloader.fold(
+        "metadata_balanced_kfold_stage_0"
+    ).pre_transformer_matrix_holder
+    i_post = iloader.fold(
+        "metadata_balanced_kfold_stage_0"
+    ).post_transformer_matrix_holder
+    return eloader, e_pre, e_post, iloader, i_pre, i_post
 
 
-def FIRST_PART():
-    pass
+def per_slice_sample_reflippers(base_matrix: Matrix) -> np.ndarray:
+    """Build sample_reflippers for (reg,thresh) slices.
 
-
-def debug_context():
-    eloader = FlyteExperimentLoader.from_run_id(_TRAINING_RUN_ID, domain="development", project="pineapple")
-    e_pre = eloader.fold('train_set_final').pre_transformer_fold_holder.train
-    e_post = eloader.fold('train_set_final').post_transformer_fold_holder.train
-    empre = e_pre[e_pre.features[0]]
-    empost = e_post[e_post.features[0]]
-    iloader = FlyteInferenceLoader.from_run_id(_INFERENCE_RUN_ID, domain="development", project="pineapple")
-    i_pre = iloader.fold('metadata_balanced_kfold_stage_0').pre_transformer_matrix_holder
-    i_post = iloader.fold('metadata_balanced_kfold_stage_0').post_transformer_matrix_holder
-    impre = i_pre[i_pre.features[0]]
-    impost = i_post[i_post.features[0]]
-
-    pre_data = pd.DataFrame(index=impre.sample_ids)
-    pre_types = [rmd.dataset.sample_metadata.pathologic_type for rmd in impre.row_metadata]
-    pre_data['type'] = [simplify_pathological_type(x) for x in pre_types]
-    pre_data['label'] = impre.y
-    RELEVANT_REGION = 236
-    CHOSEN_CUTOFF = 5
-    full_slice = impre.x[:, RELEVANT_REGION, CHOSEN_CUTOFF, :]
-    pre_data['methyl'] = full_slice[:, 0] / full_slice[:, 1]
-    # plot_methyl_dists(pre_data, 'pre_transformer_chain')
-
-    post_data = pd.DataFrame(index=impost.sample_ids)
-    post_types = [rmd.dataset.sample_metadata.pathologic_type for rmd in impost.row_metadata]
-    post_data['type'] = [simplify_pathological_type(x) for x in post_types]
-    post_data['label'] = impost.y
-    post_data['methyl'] = impost.x[:, 1]
-    # plot_methyl_dists(post_data, 'post_transformer_chain')
-
-    post_neg_mask = e_post[e_post.features[0]].y == 0
-    mcpg = e_post[e_post.features[0]][post_neg_mask].x.sum(axis=0)[1]
-    tcpg = e_post[e_post.features[0]][post_neg_mask].x.shape[0] * _NORM_TCPG_COUNT
-    c = i_post[i_post.features[0]].x[:, 1].astype(int)
-    h = _NORM_TCPG_COUNT - c
-    post_flipper = sample_reflipper(mcpg, tcpg)
-    post_perturbations = list()
-    for mcpg, tcpg in zip(c, h):
-        perturbed = post_flipper(mcpg, tcpg-mcpg, _N_REROLLS)
-        post_perturbations.append(perturbed)
-    post_pert_x = np.concatenate(post_perturbations)
-
-    pre_neg_mask = e_pre[e_pre.features[0]].y == 0
-    pre_mcpg_tcpg_pairs = e_pre[e_pre.features[0]][pre_neg_mask].x.sum(axis=0)
-    pmtp = pre_mcpg_tcpg_pairs
-    pre_flippers = list()
+    returns:
+        slice_flippers: np.ndarray(ReflipFunc, shape=(n_regions, n_settings))
+    """
+    neg_mask = base_matrix[base_matrix.features[0]].y == 0
+    mcpg_tcpg_pairs = base_matrix[base_matrix.features[0]][neg_mask].x.sum(axis=0)
+    pmtp = mcpg_tcpg_pairs
+    slice_flippers = list()
     for reg in range(pmtp.shape[0]):
         reg_slice = list()
-        pre_flippers.append(reg_slice)
+        slice_flippers.append(reg_slice)
         for thresh in range(pmtp.shape[1]):
             flipper = sample_reflipper(*pmtp[reg, thresh])
             reg_slice.append(flipper)
-    pre_flippers = np.array(pre_flippers)
+    slice_flippers = np.array(slice_flippers)
+    return slice_flippers
 
-    i_pre_mat = i_pre[i_pre.features[0]]
-    assert i_pre_mat.shape[1:] == pmtp.shape
 
-    # DEBUG
-    # pmtp = pmtp[:2, :2]
-    # DEBUG
+def find_or_build_perturbed_x(
+    base_matrix: Matrix, slice_flippers: np.ndarray
+) -> np.ndarray:
+    """Build new x data for base_matrix using provided per-slice reflippers
+
+    returns:
+        np.ndarray(int, shape=base_matrix.x.shape)"""
+    base_feature = base_matrix[base_matrix.features[0]]
+    assert base_feature.shape[1:3] == slice_flippers.shape
+
     try:
-        pre_pert_x = np.load("pert_x.npy")
+        slice_pert_x = np.load(_PERTURBED_X_FILENAME)
     except FileNotFoundError:
         perturbed_slices = list()
-        for reg in range(pmtp.shape[0]):
+        for reg in range(slice_flippers.shape[0]):
             reg_sub = list()
-            for thresh in range(pmtp.shape[1]):
-                base_slice = i_pre_mat[:, reg, thresh, :].x
+            for thresh in range(slice_flippers.shape[1]):
+                base_slice = base_feature[:, reg, thresh, :].x
                 top_pair = base_slice[np.argmax(base_slice[:, 0])]
                 print(f"re-flipping region: {reg}, thresh: {thresh}, top: {top_pair}")
-                pre_flipper = pre_flippers[reg, thresh]
-                pre_perturbations = list()
+                slice_flipper = slice_flippers[reg, thresh]
+                slice_perturbations = list()
                 for mcpg, tcpg in base_slice:
-                    perturbed = pre_flipper(mcpg, tcpg-mcpg, _N_REROLLS)
-                    pre_perturbations.append(perturbed)
-                perturbed_slice = np.concatenate(pre_perturbations)
+                    perturbed = slice_flipper(mcpg, tcpg - mcpg, _N_REROLLS)
+                    slice_perturbations.append(perturbed)
+                perturbed_slice = np.concatenate(slice_perturbations)
                 reg_sub.append(perturbed_slice)
             perturbed_slices.append(reg_sub)
         perturbed_slices = np.array(perturbed_slices)
-        pre_pert_x = np.transpose(perturbed_slices, (2, 0, 1, 3))
-        np.save("pert_x.npy", pre_pert_x)
+        slice_pert_x = np.transpose(perturbed_slices, (2, 0, 1, 3))
+        np.save(_PERTURBED_X_FILENAME, slice_pert_x)
+    return slice_pert_x
 
-    redundant_pert_pre_row_metas = np.repeat(i_pre_mat.row_metadata, _N_REROLLS)
 
+def build_new_metas(base_metas: np.ndarray, n_rerolls: int) -> np.ndarray:
+    "expand each metadata to n_rerolls copies but with counter-tagged unique dsids"
+    redundant_metas = np.repeat(base_metas, n_rerolls)
     dsid_counter = defaultdict(int)
-    pert_pre_row_meta_list = list()
-    for rmd in redundant_pert_pre_row_metas:
+    non_redundant_metas = list()
+    for rmd in redundant_metas:
         udsid = f"{rmd.dataset.id}/{dsid_counter[rmd.dataset.id]}"
         dsid_counter[rmd.dataset.id] += 1
         udsmd = deepcopy(rmd.dataset.raw_dataset_metadata)
-        udsmd['id'] = udsid
+        udsmd["id"] = udsid
         urmdds = CalzoneDatasetMetadata(
-            raw_dataset_metadata = udsmd,
+            raw_dataset_metadata=udsmd,
             raw_sample_metadata=rmd.dataset.raw_sample_metadata,
             raw_tube_metadata=rmd.dataset.raw_tube_metadata,
             raw_quiche_metadata=rmd.dataset.raw_quiche_metadata,
@@ -148,78 +137,42 @@ def debug_context():
             raw_study_metadata=rmd.dataset.raw_study_metadata,
         )
         urmd = RowMetadata(label=rmd.label, source=rmd.source, dataset=urmdds)
-        pert_pre_row_meta_list.append(urmd)
-    pert_pre_row_metas = np.array(pert_pre_row_meta_list)
-    assert len(i_pre.features) == 1
-    pert_i_pre_mat = i_pre_mat.replace_x_and_axis_metadata(
-        pre_pert_x,
-        [
-            pert_pre_row_metas,
-            *i_pre_mat.axis_metadata[1:]
-        ]
-    )
-
-    efold = eloader.fold("train_set_final")
-    etransformers  = efold.feature(pert_i_pre_mat.name).fitted_transformers
-    pert_i_pre_trans_mat = pert_i_pre_mat
-    intermediate_mats = list()
-    for transformer in etransformers:
-        pert_i_pre_trans_mat = transformer.transform_inference(pert_i_pre_trans_mat)
-        intermediate_mats.append(pert_i_pre_trans_mat)
-
-    mid_frame = pd.DataFrame(
-        intermediate_mats[2].x[:, :, 0].sum(axis=1),
-        index=intermediate_mats[2].dataset_ids,
-        columns=["raw"]
-    ).sort_index()
-    end_frame = pd.DataFrame(
-        pert_i_pre_trans_mat.x[:, 1],
-        index=pert_i_pre_trans_mat.dataset_ids,
-        columns=["scaled"]
-    ).sort_index()
-    pert_i_pre_trans_frame = pd.DataFrame(index=end_frame.index)
-    pert_i_pre_trans_frame["raw"] = mid_frame.raw
-    pert_i_pre_trans_frame["scaled"] = end_frame.scaled
-    factor = (100_000 * pert_i_pre_trans_frame.raw) / pert_i_pre_trans_frame.scaled
-    pert_i_pre_trans_frame["tcpg"] = 100000
-    pert_i_pre_trans_frame.loc[mask, "tcpg"] = factor[mask]
-
-    pdb.set_trace()
-
-    print("I guess we're done debugging!")
+        non_redundant_metas.append(urmd)
+    expanded_row_metas = np.array(non_redundant_metas)
+    return expanded_row_metas
 
 
-# p(c'|c) = p(C)*p(c|C)*p(c'|C) + p(H)*p(c|H)*p(c'|H)
-# p(c'|h) = p(C)*p(h|C)*p(c'|C) + p(H)*p(h|H)*p(c'|H)
+def sample_reflipper(mcpg_neg: int, tcpg_neg: int) -> ReflipFunc:
+    """
+    Logical Grounding:
+        p(c'|c) = p(C)*p(c|C)*p(c'|C) + p(H)*p(c|H)*p(c'|H)
+        p(c'|h) = p(C)*p(h|C)*p(c'|C) + p(H)*p(h|H)*p(c'|H)
 
-# p(c|H) = p_flipped
-# p(c'|H) = p_flipped
-# p(h|H) = 1 - p_flipped
+        p(c|H) = p_flipped
+        p(c'|H) = p_flipped
+        p(h|H) = 1 - p_flipped
 
-# THE BIG ASSUMPTION
-# p(c|C) = 1 - p_flipped
-# p(c'|C) = 1 - p_flipped
-# p(h|C) = p_flipped
+        THE BIG ASSUMPTION
+        p(c|C) = 1 - p_flipped
+        p(c'|C) = 1 - p_flipped
+        p(h|C) = p_flipped
 
-# P(H) = 1 - p(C)
-
-
-def sample_reflipper(mcpg_neg: int, tcpg_neg: int) -> Callable[[int, int], Tuple[int, int]]:
+        P(H) = 1 - p(C)
+    """
     p_flipped = mcpg_neg / tcpg_neg
     min_p_cancer = 1 / (10 * _NORM_TCPG_COUNT)
     p_cancer = np.concatenate([np.array([0]), np.geomspace(min_p_cancer, 1, 1000)])
-    p_c_c = ((1-p_cancer) * p_flipped**2) +\
-            (p_cancer * (1-p_flipped)**2)
+    p_c_c = ((1 - p_cancer) * p_flipped ** 2) + (p_cancer * (1 - p_flipped) ** 2)
     p_c_c = p_c_c[:, np.newaxis]
-    p_c_h = (p_cancer * p_flipped * (1-p_flipped)) +\
-            ((1-p_cancer) * (1-p_flipped) * p_flipped)
+    p_c_h = (p_cancer * p_flipped * (1 - p_flipped)) + (
+        (1 - p_cancer) * (1 - p_flipped) * p_flipped
+    )
     p_c_h = p_c_h[:, np.newaxis]
 
     # memolog = dict()
     def reflip_func(c_m: int, h_m: int, n_resample: int) -> Tuple[int, int]:
-        split_post_agg = list()
         # iterate over all ways to split c_m over the two source cases (c|c) and (c|h)
-        from_c = np.array(range(0, c_m+1))
+        from_c = np.array(range(0, c_m + 1))
         from_h = c_m - from_c
         split_post = st.binom.pmf(from_c, c_m, p_c_c) * st.binom.pmf(from_h, h_m, p_c_h)
         split_probs = split_post.sum(axis=1)
@@ -231,16 +184,145 @@ def sample_reflipper(mcpg_neg: int, tcpg_neg: int) -> Callable[[int, int], Tuple
             # if the negs had no data for this slice, leave it alone
             return np.tile([c_m, h_m], [n_resample, 1])
         else:
-            c_perturbed = _RNG.binomial(c_m, best_p_c_c, n_resample) +\
-                          _RNG.binomial(h_m, best_p_c_h, n_resample)
+            c_perturbed = _RNG.binomial(c_m, best_p_c_c, n_resample) + _RNG.binomial(
+                h_m, best_p_c_h, n_resample
+            )
             h_perturbed = trials - c_perturbed
             return np.array([c_perturbed, h_perturbed]).T
 
     return reflip_func
 
 
+def pre_poisson_counts(loader: FlyteExperimentLoader, pre_mat: Matrix) -> pd.DataFrame:
+    """Apply transformer chain and extract pre-poisson count data.
+
+    args:
+        loader: FlyteExperimentLoader containing the fitted transformer chain
+        pre_mat: pre-transformer-chain count matrix
+    returns:
+        count_frame:
+            "unscaled_mcpg": mid-transformer-chain un-standardized mcpg (just before "poisson-outlier" standard)
+            "unscaled_tcpg": corresponding imputed un-standardized tcpgs
+            "hmfc": the scaled output score ("fragments per 100_000")
+            "scale_factor": the scale_factor for converting unscaled_mcpg to post_mat mcpg
+            "y": the dataset y-label
+    """
+    fold = loader.fold("train_set_final")
+    trans_mat = pre_mat
+    transformers = fold.feature(pre_mat.name).fitted_transformers
+    intermediate_mats = list()
+    for transformer in transformers:
+        trans_mat = transformer.transform_inference(trans_mat)
+        intermediate_mats.append(trans_mat)
+    poisson_pos = next(
+        i
+        for i in range(len(transformers))
+        if "PoissonOutlier" in transformers[i].spec["name"]
+    )
+    pre_poisson = poisson_pos - 1
+    unscaled_mcpg = pd.Series(
+        np.rint(intermediate_mats[pre_poisson].x[:, :, 0].sum(axis=1)),
+        index=intermediate_mats[pre_poisson].dataset_ids,
+        name="unscaled_mcpg",
+    )
+    unscaled_tcpg = pd.Series(
+        np.rint(intermediate_mats[pre_poisson].x[:, :, 1].sum(axis=1)),
+        index=intermediate_mats[pre_poisson].dataset_ids,
+        name="unscaled_tcpg",
+    )
+    hmfc = pd.Series(
+        trans_mat.x[:, 1],
+        index=trans_mat.dataset_ids,
+        name="hmfc",
+    )
+    y = pd.Series(
+        intermediate_mats[pre_poisson].y,
+        index=intermediate_mats[pre_poisson].dataset_ids,
+        name="y",
+    )
+    count_frame = pd.DataFrame(
+        [unscaled_mcpg, unscaled_tcpg, hmfc, y],
+    ).T.sort_index()
+    count_frame['base_dsid'] = [x.split('/')[0] for x in count_frame.index]
+
+    def scale_factor(group: pd.DataFrame):
+        """compute factor to scale from mcpg -> hmfc
+
+        In other words: How many out of _NORM_TCPG_COUNT (implicit) is one unit of
+        unscaled_mcpg for this group
+        """
+        if np.allclose(group.hmfc, 0):
+            return 1
+        else:
+            idx = next(i for i in range(len(group)) if not np.isclose(group.iloc[i].hmfc, 0))
+            row = group.iloc[idx]
+            return (row.hmfc / row.unscaled_mcpg)
+
+    count_frame['scale_factor'] = count_frame['base_dsid'].map(
+        count_frame.groupby('base_dsid').apply(scale_factor)
+    )
+    count_frame['unscaled_tcpg'] = count_frame['unscaled_tcpg'].astype(int)
+    count_frame["unscaled_mcpg"] = count_frame["unscaled_mcpg"].astype(int)
+    count_frame["y"] = count_frame["y"].astype(int)
+    return count_frame
+
+
+# TODO(jsh): These can be deleted if we don't need them soon...
+# def plot_methyl_dists(data, png_prefix):
+#     sns.displot(data=data, x="methyl", hue="type", kind="ecdf")
+#     plt.savefig( f"{png_prefix}.methyl.dists.png", dpi=300)
+#     plt.close("all")
+#
+#
+# def simplify_pathological_type(typename):
+#     if typename is not None:
+#         if typename.startswith("Negative"):
+#             return "NEG"
+#         elif typename == "Adenocarcinoma":
+#             return "CRC"
+#         elif typename == "AA":
+#             return "AA"
+#     return None
+
+
 def main():
-    debug_context()
+    eloader, e_pre, _e_post, iloader, i_pre, _i_post = build_loaders(
+        _TRAINING_RUN_ID, _INFERENCE_RUN_ID
+    )
+    assert len(e_pre.features) == 1
+    assert len(_e_post.features) == 1
+    assert len(i_pre.features) == 1
+    assert len(_i_post.features) == 1
+
+    e_pre_mat = e_pre[e_pre.features[0]]
+    train_count_frame = pre_poisson_counts(eloader, e_pre_mat)
+    neg_count_frame = train_count_frame.loc[train_count_frame.y == 0]
+    mcpg = neg_count_frame.unscaled_mcpg.sum()
+    tcpg = neg_count_frame.unscaled_tcpg.sum()
+    c = mcpg
+    h = tcpg-mcpg
+    post_flipper = sample_reflipper(mcpg, tcpg)
+
+    i_pre_mat = i_pre[i_pre.features[0]]
+    base_count_frame = pre_poisson_counts(eloader, i_pre_mat)
+    perturbations = list()
+    for mcpg, tcpg in zip(base_count_frame.unscaled_mcpg, base_count_frame.unscaled_tcpg):
+        perturbed = post_flipper(mcpg, tcpg - mcpg, _N_REROLLS)
+        perturbations.append(perturbed)
+    perturbed_post = np.concatenate(perturbations)
+    perturbed_post_dsids = np.repeat(base_count_frame.index, _N_REROLLS)
+
+    slice_reflippers = per_slice_sample_reflippers(e_pre)
+    perturbed_pre_x = find_or_build_perturbed_x(i_pre, slice_reflippers)
+    perturbed_pre_rmds = build_new_metas(i_pre_mat.row_metadata, _N_REROLLS)
+    pert_i_pre_mat = i_pre_mat.replace_x_and_axis_metadata(
+        perturbed_pre_x, [perturbed_pre_rmds, *i_pre_mat.axis_metadata[1:]]
+    )
+    pre_pert_count_frame = pre_poisson_counts(eloader, pert_i_pre_mat)
+
+    pdb.set_trace()
+
+    return
 
 
 if __name__ == "__main__":
