@@ -6,6 +6,7 @@ import pdb
 
 # from matplotlib import pyplot as plt
 # from matplotlib import cm
+import joypy
 import numpy as np
 import pandas as pd
 
@@ -169,7 +170,7 @@ def sample_reflipper(mcpg_neg: int, tcpg_neg: int) -> ReflipFunc:
     )
     p_c_h = p_c_h[:, np.newaxis]
 
-    # memolog = dict()
+    # TODO(jsh): this should return mcpg/tcpg, and (ONLY THEN) outer functions should behave accordingly
     def reflip_func(c_m: int, h_m: int, n_resample: int) -> Tuple[int, int]:
         # iterate over all ways to split c_m over the two source cases (c|c) and (c|h)
         from_c = np.array(range(0, c_m + 1))
@@ -244,45 +245,28 @@ def pre_poisson_counts(loader: FlyteExperimentLoader, pre_mat: Matrix) -> pd.Dat
         [unscaled_mcpg, unscaled_tcpg, hmfc, y],
     ).T.sort_index()
     count_frame['base_dsid'] = [x.split('/')[0] for x in count_frame.index]
-
-    def scale_factor(group: pd.DataFrame):
-        """compute factor to scale from mcpg -> hmfc
-
-        In other words: How many out of _NORM_TCPG_COUNT (implicit) is one unit of
-        unscaled_mcpg for this group
-        """
-        if np.allclose(group.hmfc, 0):
-            return 1
-        else:
-            idx = next(i for i in range(len(group)) if not np.isclose(group.iloc[i].hmfc, 0))
-            row = group.iloc[idx]
-            return (row.hmfc / row.unscaled_mcpg)
-
-    count_frame['scale_factor'] = count_frame['base_dsid'].map(
-        count_frame.groupby('base_dsid').apply(scale_factor)
-    )
+    count_frame['scale_factor'] = (_NORM_TCPG_COUNT / count_frame.unscaled_tcpg)
     count_frame['unscaled_tcpg'] = count_frame['unscaled_tcpg'].astype(int)
     count_frame["unscaled_mcpg"] = count_frame["unscaled_mcpg"].astype(int)
     count_frame["y"] = count_frame["y"].astype(int)
     return count_frame
 
 
-# TODO(jsh): These can be deleted if we don't need them soon...
-# def plot_methyl_dists(data, png_prefix):
-#     sns.displot(data=data, x="methyl", hue="type", kind="ecdf")
-#     plt.savefig( f"{png_prefix}.methyl.dists.png", dpi=300)
-#     plt.close("all")
-#
-#
-# def simplify_pathological_type(typename):
-#     if typename is not None:
-#         if typename.startswith("Negative"):
-#             return "NEG"
-#         elif typename == "Adenocarcinoma":
-#             return "CRC"
-#         elif typename == "AA":
-#             return "AA"
-#     return None
+def plot_methyl_dists(data, png_prefix):
+    sns.displot(data=data, x="methyl", hue="type", kind="ecdf")
+    plt.savefig( f"{png_prefix}.methyl.dists.png", dpi=300)
+    plt.close("all")
+
+
+def simplify_pathological_type(typename):
+    if typename is not None:
+        if typename.startswith("Negative"):
+            return "NEG"
+        elif typename == "Adenocarcinoma":
+            return "CRC"
+        elif typename == "AA":
+            return "AA"
+    return None
 
 
 def main():
@@ -299,26 +283,40 @@ def main():
     neg_count_frame = train_count_frame.loc[train_count_frame.y == 0]
     mcpg = neg_count_frame.unscaled_mcpg.sum()
     tcpg = neg_count_frame.unscaled_tcpg.sum()
-    c = mcpg
-    h = tcpg-mcpg
     post_flipper = sample_reflipper(mcpg, tcpg)
 
     i_pre_mat = i_pre[i_pre.features[0]]
     base_count_frame = pre_poisson_counts(eloader, i_pre_mat)
-    perturbations = list()
-    for mcpg, tcpg in zip(base_count_frame.unscaled_mcpg, base_count_frame.unscaled_tcpg):
-        perturbed = post_flipper(mcpg, tcpg - mcpg, _N_REROLLS)
-        perturbations.append(perturbed)
-    perturbed_post = np.concatenate(perturbations)
-    perturbed_post_dsids = np.repeat(base_count_frame.index, _N_REROLLS)
+
+    _NUM_POST_PERT_TRIALS = 10
+    perturbations = defaultdict(list)
+    for _, row in base_count_frame.iterrows():
+        mcpg = row.unscaled_mcpg
+        tcpg = row.unscaled_tcpg
+        for i in range(_NUM_POST_PERT_TRIALS):
+            perturbed = post_flipper(mcpg, tcpg - mcpg, _N_REROLLS)
+            hmfcs = perturbed[:, 0] * row.scale_factor
+            perturbations[f"trial_{i}"].append(hmfcs)
+    trial_cols = dict()
+    for i in range(_NUM_POST_PERT_TRIALS):
+        trial_cols[f"trial_{i}"] = np.concatenate(perturbations[f"trial_{i}"])
+    # TODO(jsh): These clearly need to be saved out to disk!
+    post_pert_trial_frame = pd.DataFrame(trial_cols)
+    post_pert_trial_frame["base_dsid"] = np.repeat(base_count_frame.index, _N_REROLLS)
 
     slice_reflippers = per_slice_sample_reflippers(e_pre)
     perturbed_pre_x = find_or_build_perturbed_x(i_pre, slice_reflippers)
+    perturbed_pre_x[..., 1] += perturbed_pre_x[..., 0]
     perturbed_pre_rmds = build_new_metas(i_pre_mat.row_metadata, _N_REROLLS)
     pert_i_pre_mat = i_pre_mat.replace_x_and_axis_metadata(
         perturbed_pre_x, [perturbed_pre_rmds, *i_pre_mat.axis_metadata[1:]]
     )
     pre_pert_count_frame = pre_poisson_counts(eloader, pert_i_pre_mat)
+
+    post_pert_trial_frame["pre_pert"] = pre_pert_count_frame.reset_index().hmfc
+    for dsid, group in post_pert_trial_frame.groupby("base_dsid"):
+        joypy.joyplot(group, legend=False)
+        plt.savefig(f"post_trials.{dsid}.joyplot.png", dpi=300)
 
     pdb.set_trace()
 

@@ -7,6 +7,7 @@
 *.outdir/
 *.h5
 *.npy
+post_pert_trial_frame.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
